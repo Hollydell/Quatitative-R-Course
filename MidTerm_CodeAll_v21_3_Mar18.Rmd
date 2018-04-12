@@ -1,0 +1,797 @@
+---
+title: "Do demographics and political divisions of territory affect species distribution? Case of invasive plants in Pennsylvania"
+author: "Alice Purchalsky, Chris Carnivale, Jerry So, Mariana Bonfim, Viriya Keo"
+affiliation: "Temple University"
+date: "3/22/2018"
+output: html_document
+---
+
+# Table of Contents
+
+1. Abstract
+2. Part 1: Wrangle Invasive Species Data and Pennsylvania Spatial Information
+  + Data Source
+  + Focal Group of Interest within Invasives Species 
+  + Tidying Data: Creating Useable Years
+3. Part 2: Exploratory Data Analysis - Univariate
+  + Exploring Invasive Plant distribution and richness in Pennsylvania
+  + Variation in the number of invasive plants for different scales across PA state
+  + Univariate distributions of invasive plant richness per scale
+  + Effects of sampling effort
+4. Part 3: Exploratory Data Analysis - Multivariate
+  + Exploring covariation among the groups and human demographics
+    + Which political party represent areas with more invasive species?
+    + Does the rate of human population growth correlate to the rate of plant species invasions?
+    +Is there a correlation between population growth and invasion rate?
+    +Can occurence of most abundant invasive plant species increase overall invasive plant richness?
+  + Final Considerations
+
+
+# **Abstract**
+
+When transported outside of its natural distribution range, organisms can establish in the novel environment and impact local biota. Several factors can accelerate/reduce rates of this invaders in their introduced range, so understanding species distribution may provide valuable insights in invasion patterns and dynamics in a given locality. Here, we explore invasive plants spatio-temporal distribution in the state of Pennsylvania. Results suggest that political divisions of territory may hinder information on distribution patterns and human demographics do not seem to drive invasion success. It is possible that other environmental factors and/ or rates of human dispersal instead of growth, play a more important role in determining invasion dynamics in this state.
+
+#**Part 1: Wrangle Invasive Species Data and Pennsylvania Spatial Information**
+
+##**Data source**
+
+This resports covers an exploratory data analysis with data obtained from iMapInvasives, an online, GIS-based public data base fed by citizen scientists and other professionals to track invasive species in Pennsylvania, USA. more info: <https://www.imapinvasives.org/> 
+
+```{r Clear Environment, include=FALSE}
+# *Clear workspace prior starting*
+
+# Before beggining, you might consider start with a fresh environment by clearing up our workspace running the code below.
+
+rm(list=ls()) 
+
+```
+
+```{r Package setup, include=FALSE}
+## Preparing Data Wrangling Tools and Data for Analysis
+### Load necessary packages
+
+library(ggmap)
+library(rgdal)
+library(raster)
+library(tidyverse)
+library(rgeos)
+library(maptools)
+library(plyr)
+library(ggpubr)
+library(gridExtra)
+library(lazyeval)
+
+## NOTE: make sure those are installed in your R packages. If not, install them using install.package()
+
+```
+
+```{r Load datasets, include=FALSE}
+## Loading invasive species data and iMap species details
+
+#invasives <- read_csv(file.choose()) # Load CSV file containing PA invasive species database 
+
+#groups <- read_csv(file.choose())    # Load CSV file containing iMAP invasives and groups 
+
+## Examples can be found below
+invasives <- read_csv("/Users/christophercarnivale/Desktop/TempleRcourse/all_obs_imap_18Dec17_v2_0.csv - all_obs_imap_18Dec17_v2_0.csv.csv")
+groups <- read_csv("/Users/christophercarnivale/Desktop/TempleRcourse/iMap_sppp.csv")
+
+# *NOTE: Here, make sure you are able to load the working databases. file.choose() may not work for some machiens, so be attentive to substitute by your working directory. Working CSV files are named "all_obs_imap_18Dec17_v2_0.csv" (for invasive species data base) and iMap_sppp.csv (for data with names and additional species classifications associated with them)*
+
+```
+
+```{r Renaming columns, include=FALSE}
+## Change variable names in working data base
+# To make it easier to call and join the two data sets, rename some key columns necessary.
+
+## Selecting Variables and Consistent Naming/Spatial Coordinates
+
+## To facilitate our exploratory analysis, key columns containing data that would be used to     investigate our questions regarding invasive plants were renamed to account for consistency    throughout this analysis. Renaming variables when performing analysis is particularlly        important when working with public data sets, because it standardizes data and builds a       mores comprehensive report. Our analysis mostly rely on mapping and calculating species       richness.
+
+
+invasives <- rename(invasives, c("obsorigxcoord" = "long", "obsorigycoord" = "lat",
+                                 "stateCommonName" = "common_name", 
+                                 "state_scientific_name" = "spp_name", "County" = "county", "obs_species_id_method_name" = "id_method"))
+
+groups <- rename(groups, c("stateCommonName" = "common_name",
+                           "state_scientific_name" = "spp_name", "SpeciesType" = "spp_type"))
+```
+
+## **Focal group of interest within invasive species** 
+We use filters to solely look at invasive plant species across Pennsylvania. Besides its ecological and economical importance, plants seem to have the greatest number of species records and having been better tracked through time. To assure we can perform a robust exploratory data analysis with enough information, we will be working with plant invasive species.
+
+```{r Filter invasive data for plants, include=FALSE}
+
+##**Lanternfly Data Removal**
+
+## Lanterflies have been considered one the most harmful invasives in Pennsylvania. However,     its detection has been fairly recent and the number of records in iMapInvasives do not seem    to be reliable for this species especiffically. To make sure that this record does not        affect our analysis we excluded it from the data.
+
+
+group_type <- groups %>%
+  dplyr::select (spp_name, spp_type) %>%
+  mutate()
+
+nis_plants <- invasives %>%                  
+  dplyr::select(common_name, spp_name, county, 
+         natlhabitat, long, lat, obsdate, id_method) %>%  # select variables to work with 
+  filter (common_name != "Spotted Lanternfly") %>%        # filter laternfly spp out 
+  mutate() %>%                                            # mutate df  
+  left_join(group_type, by = "spp_name") %>%              # join with groups df
+  filter(spp_type == "plant")                             # filter by working group (plants)
+
+```
+
+```{r Create a spatialPolygonDataFrame, include=FALSE}
+## Prepare for mapping distributions of invasive plants
+
+### Tranform plants data into a spatialPolygonDataFrame  
+#  Using coordinates, transform df into a spatialPolygonDataFrame of same coordinate system WGS1984
+
+coordinates(nis_plants) <- ~long+lat
+                        # uses coordinates for plotting in SPDF format
+
+proj4string(nis_plants) <- '+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0'
+                        # set up coordinate system to standardize when mapping distributions
+```
+
+##**Tidying Data: Creating Useable Years**
+
+A lot of databases create data tables that make it easier to record observations or for data entry. However, this doesn't always mean that this is the best format for analyzing the data. Take years in the ivnaisve Imap dataset, for example. The year variable is orginally in POSIXlt date-time format. Date-time, while informative, is not easily used during analysis. In order to proceed through the analysis, we had to convert from Date-time to years as a numeric class.
+
+```{r Clean the "obsdate" variable, include=FALSE}
+### Fix dates of records for plant invasives
+# Due to problems in data recording, we will need to perfom some cleaning and stardardizing in the variable "obsdate" to filter for valid years only.
+
+# 1. Change from date-time to chr - split the string into 2 elements: date and time - then unlist
+fixDates <- unlist(strsplit(as.character(nis_plants$obsdate), ' '))
+
+# 2. Subset the list to extract only the date elements. 
+## NOTE: Use seq here but there are other ways to do so
+fixDates <- fixDates[seq(1, length(fixDates), by=2)]
+
+# 3. Fill in obsdate data with date in month, day, year format
+## NOTE: Dates are a string
+nis_plants$obsdate <- as.Date(fixDates, format='%m/%d/%Y')
+
+# 4. Now that the dates are a string we can extract the 4 digit year with substring and change the string of numbers to a numeric - *creates a column called "year"*
+nis_plants$year <- as.numeric(substr(nis_plants$obsdate, start=1, stop=4))
+
+# 5. Now that the date is in the proper numeric year only format we need to filter those that don't have a year.
+
+nis_plantsNArm <- nis_plants[! is.na(nis_plants@data$year),]     # Get rid of entries
+NIS_plants <- nis_plantsNArm                                     # Rename to facilitate coding from now on
+
+## NOTE: Fun Fact: data needs to be an S4 object in order to subest the data by date as the code is written. So turning it into a spatialpointsdatafram is essential for the subsetting to work
+
+```
+
+```{r Loading shapefiles, include=FALSE}
+### Load polygon shape files for each grain
+
+#town <- readOGR(dsn=choose.dir(), layer='PaMunicipalities2017_01')
+#s_senate <- readOGR(dsn=choose.dir(), layer='PaSenatorial2017_01')
+#s_house <- readOGR(dsn=choose.dir(), layer='PaHouse2017_01')
+#congress <- readOGR(dsn=choose.dir(), layer='PaCongressional2017_01')
+#county <- readOGR(dsn=choose.dir(), layer='PaCounty2017_01')
+
+## Examples can be found below
+town <- readOGR(dsn = "/Users/christophercarnivale/Desktop/TempleRcourse/Municipalities_shp", layer='PaMunicipalities2017_01')
+s_senate <- readOGR(dsn = "/Users/christophercarnivale/Desktop/TempleRcourse/Senate_shp", layer='PaSenatorial2017_01')
+s_house <- readOGR(dsn = "/Users/christophercarnivale/Desktop/TempleRcourse/House_shp", layer='PaHouse2017_01')
+congress <- readOGR(dsn = "/Users/christophercarnivale/Desktop/TempleRcourse/Congressional_shp", layer='PaCongressional2017_01')
+county <- readOGR(dsn = "/Users/christophercarnivale/Desktop/TempleRcourse/County_shp", layer='PaCounty2017_01')
+
+## NOTE: In some machines it might require that directory is included manually between parenthesis. Make sure you are associating the correct shapefile layer to the working grain (town, s_senate, s_house etc.). If unsure, read metadata information available on the shapefile folder "metadata_readme_vector_shapefiles".
+
+```
+
+```{r Standardize coordinate system, include=FALSE}
+### Standardize all polygon data to same coordinate system WGS1984
+
+town <- spTransform(town, CRS('+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0'))
+s_senate <- spTransform(s_senate, CRS('+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0'))
+s_house <- spTransform(s_house, CRS('+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0'))
+congress <- spTransform(congress, CRS('+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0'))
+county <- spTransform(county, CRS('+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0'))
+```
+
+#**Part 2: Exploratory Data Analysis - Univariate**
+
+# **Exploring invasive plant distribution and richness in Pennsylvania**
+How are invasive plants distributed accross the state and where can it be found the greatest number of plant invasive species? 
+
+To explore that question we calculated species richness (number of different species) for our focal group of study -- plants. Patterns of geographical distribution and frequency of occurence were then compared across different scales.
+
+```{r Function plant invasive richness per grain, include=FALSE}
+sr_per_grain <- function(df, grain, x, y, z){ 
+  hold_over <- over(df, grain)
+  hold_cbind <- cbind(hold_over, NIS_plants[[x]]) #x is species column added
+  colnames(hold_cbind)[colnames(hold_cbind) %in% 'NIS_plants[[x]]'] <- y # y = column rename to species
+  return(hold_cbind) %>% 
+  group_by_(z) %>% #z = column in grain to be grouped by
+    summarise_(plant_NIS = interp(~n_distinct(v), v = as.name(y)))
+}
+```
+
+```{r Calculate richness with function, include=FALSE}
+srPerTown <- sr_per_grain(NIS_plants, town, x = "spp_name", y = "species", z = "MUNICIPAL1")
+srPerSenate <- sr_per_grain(NIS_plants, s_senate, x = "spp_name", y = "species", z = "LEG_DISTRI")
+srPerHouse <- sr_per_grain(NIS_plants, s_house, x = "spp_name", y = "species", z = "LEG_DISTRI")
+srPerCongress <- sr_per_grain(NIS_plants, congress, x = "spp_name", y = "species", z = "LEG_DISTRI")
+srPerCounty <- sr_per_grain(NIS_plants, county, x = "spp_name", y = "species", z = "COUNTY_NAM")
+
+```
+
+## **Variation in the number of invasive plants (species richness) for different scales across PA state**
+
+```{r Data preparation for plotting, include=FALSE}
+
+# 1. First overlay shapefiles and clean up data for mapping for each grain
+invasivesTown <- town
+invasivesTown@data <- left_join(invasivesTown@data, srPerTown, by='MUNICIPAL1') 
+invasivesTowngg <- fortify(invasivesTown, region='MUNICIPAL1') 
+invasivesTowngg <- left_join(invasivesTowngg, invasivesTown@data, by=c("id" = 'MUNICIPAL1'))
+
+invasivesSenate <- s_senate
+invasivesSenate@data <- left_join(invasivesSenate@data, srPerSenate, by='LEG_DISTRI') 
+invasivesSenategg <- fortify(invasivesSenate, region='LEG_DISTRI') 
+invasivesSenategg <- left_join(invasivesSenategg, invasivesSenate@data, by=c("id" = 'LEG_DISTRI'))
+
+invasivesHouse <- s_house
+invasivesHouse@data <- left_join(invasivesHouse@data, srPerHouse, by='LEG_DISTRI') 
+invasivesHousegg <- fortify(invasivesHouse, region='LEG_DISTRI') 
+invasivesHousegg <- left_join(invasivesHousegg, invasivesHouse@data, by=c("id" = 'LEG_DISTRI'))
+
+invasivesCongress <- congress
+invasivesCongress@data <- left_join(invasivesCongress@data, srPerCongress, by='LEG_DISTRI') 
+invasivesCongressgg <- fortify(invasivesCongress, region='LEG_DISTRI') 
+invasivesCongressgg <- left_join(invasivesCongressgg, invasivesCongress@data, by=c("id" = 'LEG_DISTRI'))
+
+invasivesCounty <- county
+invasivesCounty@data <- left_join(invasivesCounty@data, srPerCounty, by='COUNTY_NAM') 
+invasivesCountygg <- fortify(invasivesCounty, region='COUNTY_NAM') 
+invasivesCountygg <- left_join(invasivesCountygg, invasivesCounty@data, by=c("id" = 'COUNTY_NAM'))
+```
+
+```{r Map function for richness per grain, include=FALSE, message=FALSE}
+# 2. Using a function, set plot settings for mapping species richness per grain
+makeMap_rich <- function(x){
+  ggplot(data = x) +
+  geom_polygon(aes(x = long, y = lat, group = group, fill = plant_NIS)) +
+  coord_fixed(1.3) +
+  scale_fill_gradient() +
+  labs(x = "Longtitude", y = "Latitude", 
+       fill = "Number of invasive plants") +
+  theme(plot.title = element_text(hjust = 0.5))
+}
+```
+
+```{r Plot maps for each grain, echo=FALSE}
+# 3. Build and visualize discrete distributions of plant invasives accross PA
+
+ptw <- makeMap_rich(invasivesTowngg) +
+  labs(title = "a - Plant invasives richness by Municipalities in PA")
+pss <- makeMap_rich(invasivesSenategg) +
+  labs(title = "b - Plant invasives richness by Senatorial disticts in PA")
+psh <- makeMap_rich(invasivesHousegg) +
+  labs(title = "c - Plant invasives richness by Legislative house districts in PA")
+pcg <- makeMap_rich(invasivesCongressgg) +
+  labs(title = "d - Plant invasives richness by Congressional districts in PA")
+pct <- makeMap_rich(invasivesCountygg) +
+  labs(title = "e - Plant invasives richness by Counties in PA")
+
+ptw
+pss
+psh
+pcg
+pct
+
+```
+
+The concentration of invasive plants seem to increase as scales get more broad. That does not mean more or less invaded areas, it is just a matter of geographical resolution. However, it is important to notice that for most political divisions of the state, that information is not too relevant to understand species distributions. Also, the number of invasives per town (panel a) get to a too refined scale, hindering some overall patterns. In this sense, from those divisions County (panel e) seems to be one of the best to look at patterns of plant invasions, because it also takes into account geographical and economical division. Looking deeper in the county data, there seems to be a somewhat homogeneous distribution in terms of number of species around 25, with a few couties with more than 75 invasive plant species.
+
+## **Univariate distributions of invasive plants richness per scale**
+
+In order to determine patterns of richness frequencies for each grain (scale) in terms of species richness, we will be visually comparing those using frequency plots, also known as histograms.
+
+```{r Histogram plot functions, include=FALSE}
+# 1.First, start with a function for plotting histograms for transformed (log10) and untransformed richness data
+
+histogram <- function (x){
+  ggplot(data = x, aes(x = plant_NIS)) +
+  geom_histogram() +
+  scale_x_continuous() +
+  theme(plot.title = element_text(hjust=0.5)) + 
+    labs(title ="a - absolute richness", 
+       x = "Number of species", y = "Frequency of occurence") +
+  theme_classic()
+}
+
+histogramlog10 <- function (x){
+  ggplot(data = x, aes(x = plant_NIS)) +
+  geom_histogram(binwidth = 0.08) +
+  scale_x_log10() +
+  theme(plot.title = element_text(hjust=0.5)) + 
+  labs(title = "b - log10 transformed richness", 
+       x = "log10 number of species", y = "Frequency of occurence") +
+  theme_classic()
+}
+```
+
+```{r Plot univariate distributions for each grain, echo = FALSE, message=FALSE}
+# 2. Using plotting functions, obtain visual representations of plant invasive species richness distributions for each grain
+
+t1 <- histogram(srPerTown)            # town richness untransformed
+t2 <- histogramlog10(srPerTown)       # town richness log10 transformed
+s1 <- histogram(srPerSenate)          # senate districts' richness untransformed
+s2 <- histogramlog10(srPerSenate)     # senate districts' richness log10 transformed
+h1 <- histogram(srPerHouse)           # house districts' richness untransformed
+h2 <- histogramlog10(srPerHouse)      # house districts' richness log10 transformed
+g1 <- histogram(srPerCongress)        # congress richness unstransformed
+g2 <- histogramlog10(srPerCongress)   # congress richness log10 transformed
+c1 <- histogram(srPerCounty)          # county richness unstransformed
+c2 <- histogramlog10(srPerCounty)     # county richness log10 transformed
+```
+
+```{r Group distributions on same grid plot, echo= FALSE, message = FALSE}
+# 3. Compare if transformation of data increased normality
+grid.arrange(t1,t2, nrow = 1,
+             top = "Distribution of invasive plant species richness \n by Municipalities in Pennsylvania")
+
+grid.arrange(s1,s2, nrow = 1,
+             top = "Distribution of invasive plant species richness \n by State Senate districts in Pennsylvania")
+
+grid.arrange(h1,h2, nrow = 1,
+             top = "Distribution of invasive plant species richness \n by State House districts in Pennsylvania")
+
+grid.arrange(g1,g2, nrow = 1,
+             top = "Distribution of invasive plant species richness \n by US Congressional districts in Pennsylvania")
+
+grid.arrange(c1,c2, nrow = 1,
+             top = "Distribution of invasive plant species richness \n by counties in Pennsylvania")
+```
+
+In summary, invasive species richness distribution geographically accross Pennsylvania have somewhat discrete patterns, given that each grain might provide a completely different refined scale. That might also be affected by different contributions in species identification, which will be explored shortly.
+
+In addition, looking at frequencies of data for each different scale, distributions mostly do not fall the normality pattern (e.g. distribution of invasive plants per town), and transformation also seem to have low or no effect in increasing normality (data distribution is more evenly distributed towards the mean). However, it is noticeable, as previously stated, the scale differences that arise using different grains to look at invasion patterns. 
+
+## **Effects of sampling effort**
+
+Does sampling effort affect results in invasive plants richness distribution?
+
+```{r Sampling Effort Effects, echo = FALSE} 
+sr_sampE_per_grain <- function(df, grain, x, w, y, u, z){ 
+  hold_over <- over(df, grain)
+  hold_cbind <- cbind(hold_over, NIS_plants[[x]], NIS_plants[[w]]) # x is species column added
+  colnames(hold_cbind)[colnames(hold_cbind) %in% c('NIS_plants[[x]]', 'NIS_plants[[w]]')] <- c(y, u) #y, u = column rename to species and id_method
+  return(hold_cbind) %>% 
+    group_by_(z, u) %>% # z = column in grain to be grouped by   
+                        # u = column group by method
+    summarise_(Richness_per_method = interp(~n_distinct(v), v = as.name(y))) 
+# NOTE: need lazyeval package to interpret the formula and set the v as a column name and not a value
+}
+
+SR_samp_county <- sr_sampE_per_grain(NIS_plants, county, x = "spp_name", w = "id_method", y = "species", u = "id_method", z = "COUNTY_NAM")
+
+SR_samp_town <- sr_sampE_per_grain(NIS_plants, town, x = "spp_name", w = "id_method", y = "species", u = "id_method", z = "MUNICIPAL1")
+
+SR_samp_Senate <- sr_sampE_per_grain(NIS_plants, s_senate, x = "spp_name", w = "id_method", y = "species", u = "id_method", z = "LEG_DISTRI")
+
+SR_samp_House <- sr_sampE_per_grain(NIS_plants, s_house, x = "spp_name", w = "id_method", y = "species", u = "id_method", z = "LEG_DISTRI")
+
+SR_samp_Congress <- sr_sampE_per_grain(NIS_plants, congress, x = "spp_name", w = "id_method", y = "species", u = "id_method", z = "LEG_DISTRI")
+
+# combine total species per grain w/ richness per grain by method
+# calculate the proportion
+SR_sampE_county <- full_join(SR_samp_county, srPerCounty, by = "COUNTY_NAM") %>% 
+  mutate(method_prop = Richness_per_method/plant_NIS)
+
+SR_sampE_town <- full_join(SR_samp_town, srPerTown, by = "MUNICIPAL1") %>% 
+  mutate(method_prop = Richness_per_method/plant_NIS)
+
+SR_sampE_Senate <- full_join(SR_samp_Senate, srPerSenate, by = "LEG_DISTRI") %>% 
+  mutate(method_prop = Richness_per_method/plant_NIS)
+
+SR_sampE_House <- full_join(SR_samp_House, srPerHouse, by = "LEG_DISTRI") %>% 
+  mutate(method_prop = Richness_per_method/plant_NIS)
+
+SR_sampE_Congress <- full_join(SR_samp_Congress, srPerCongress, by = "LEG_DISTRI") %>% 
+  mutate(method_prop = Richness_per_method/plant_NIS)
+
+SR_sampE_County_plot <- ggplot(SR_sampE_county, aes(id_method, method_prop))+
+  geom_boxplot()+
+  labs(title = "Effect of Sampling Method on Species Richness by County", x = "Sampling ID Method", y = "Proportion of Species Richness")+
+  theme(plot.title = element_text(hjust = 1.05, face = "bold"))+
+  theme(axis.title.x = element_text(face = "bold"))+
+  theme(axis.title.y = element_text(face = "bold"))+
+  coord_flip()
+
+SR_sampE_Town_plot <- ggplot(SR_sampE_town, aes(id_method, method_prop))+
+  geom_boxplot()+
+  labs(title = "Effect of Sampling Method on Species Richness by Town", x = "Sampling ID Method", y = "Proportion of Species Richness")+
+  theme(plot.title = element_text(hjust = 1.05, face = "bold"))+
+  theme(axis.title.x = element_text(face = "bold"))+
+  theme(axis.title.y = element_text(face = "bold"))+
+  coord_flip()
+
+SR_sampE_Senate_plot <- ggplot(SR_sampE_Senate, aes(id_method, method_prop))+
+  geom_boxplot()+
+  labs(title = "Effect of Sampling Method \non Species Richness by Senate District", x = "Sampling ID Method", y = "Proportion of Species Richness")+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))+
+  theme(axis.title.x = element_text(face = "bold"))+
+  theme(axis.title.y = element_text(face = "bold"))+
+  coord_flip()
+
+SR_sampE_Congress_plot <- ggplot(SR_sampE_Congress, aes(id_method, method_prop))+
+  geom_boxplot()+
+  labs(title = "Effect of Sampling Method on \nSpecies Richness by Congressional District", x = "Sampling ID Method", y = "Proportion of Species Richness")+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))+
+  theme(axis.title.x = element_text(face = "bold"))+
+  theme(axis.title.y = element_text(face = "bold"))+
+  coord_flip()
+
+SR_sampE_House_plot <- ggplot(SR_sampE_House, aes(id_method, method_prop))+
+  geom_boxplot()+
+  labs(title = "Effect of Sampling Method \non Species Richness by House District", x = "Sampling ID Method", y = "Proportion of Species Richness")+
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))+
+  theme(axis.title.x = element_text(face = "bold"))+
+  theme(axis.title.y = element_text(face = "bold"))+
+  coord_flip()
+
+SR_sampE_Congress_plot
+SR_sampE_County_plot
+SR_sampE_House_plot
+SR_sampE_Senate_plot
+SR_sampE_Town_plot
+```
+
+The sampling effort has a differing effect on species richness depending on the grain being analyzed. On average, species identified using partner data provided the largest proportion of species richness. Surprisingly, NA, or unknown, ID method had an almost identical proportion to the expert identification. Having such larger proportion of the data collected from an unknown source, forces us to re-evaluate the species richness distribution and to approach this data with a level of skepticism. This calculation, however informative, can’t take into consideration species that have been identified by multiple methods and could be skewing the proportions closer to 1.
+
+#**Part 3: Exploratory Data Analysis - Multivariate**
+
+#**Exploring covariation among groups and human demographics**
+Covariations provide valuable information in what may be driving the variation of what. In the case of species across Pennsylvania, a couple hypothesis might arise: 1) Polical party divisions might affect law making and therefore inffluence invasive species distribution; 2) Human population growth might facilitate establishment of invasive species, in a sense that more humans contribute to more introductions; 3) One established and abundant invasive species may facilitate other invasives plants, therefore increasing species richness (also know as invasion meltdown).
+
+The above cited hypothesis will be explored in separate sections below. 
+
+## **Which political party represents areas with more invasive species?**
+To answer this question, we will be exploring patterns of invasive plants richness by party, and its disttibution geographically across state of Pennsylvania for different levels of political organization. 
+
+```{r Invasive plants by political party, echo = FALSE}
+# 1. Observe plant invasive species richness by political party overall_
+
+# Recalculate species richness per grain by political party
+srPerSenateParty <- sr_per_grain(NIS_plants, s_senate, x = "spp_name", y = "species", z = "PARTY")
+srPerHouseParty <- sr_per_grain(NIS_plants, s_house, x = "spp_name", y = "species", z = "PARTY")
+srPerCongressParty <- sr_per_grain(NIS_plants, congress, x = "spp_name", y = "species", z = "PARTY")
+
+# Create plotting function 
+makeGraph_party <- function(x) {
+  ggplot(data = x) +
+  geom_col(aes(x = PARTY, y = plant_NIS, fill = PARTY), show.legend = FALSE, na.rm = TRUE) +
+  labs(x = 'Party', y = 'Number of Species') +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_manual(values = c("#00A6EF","#E91D0E"))
+}
+
+# Run function for each grain
+p1 <- makeGraph_party(srPerSenateParty) +
+  labs(title = "a - Invasive plants by party \n in the State Senate Level")
+p2 <- makeGraph_party(srPerHouseParty) +
+  labs(title = "b - Invasive plants by party \n in the State House Level")
+p3 <- makeGraph_party(srPerCongressParty) +
+  labs(title = "c - Invasive plants by party \n in the Federal Congressional Level")
+
+# Visualize plots
+p1
+p2
+p3
+```
+
+It seems that more species occuring are associated with Republicans. However that might be due the fact that this party controls most of the state. In this case we also looked at invasive plant species richness distribution geographically by political party.
+
+```{r Map distribution of invasives richness per party, echo = FALSE}
+# 2. Map distributions of plant invasive richness for each grain that includes political divisions in parties
+
+# Create a mapping function to be able to explore variations in species richness by political party
+makeMap_party <- function(x) {
+  ggplot(data = x) +
+  geom_polygon(aes(x = long, y = lat, group = group, fill = plant_NIS)) +
+  coord_fixed(1.3) +
+  scale_fill_gradient(low = "white", high = "black") +
+  geom_path(aes(x = long, y = lat, group = group, color = PARTY), size = 0.8) +
+  scale_color_manual(values = c("#00A6EF","#E91D0E")) +
+  labs(x = "Longtitude", y = "Latitude",
+       fill = "Species \nRichness", color = "Party") +
+  theme(plot.title = element_text(hjust = 0.5))
+}
+
+# Map plots of invasive plants by political party for each grain
+plantSenateParty <- makeMap_party(invasivesSenategg) +
+  labs(title = "a - Invasive plants richness \nper State Senate Legislative District")
+plantHouseParty <- makeMap_party(invasivesHousegg) +
+  labs(title = "b - Invasive plants richness \nState House Legislative District")
+plantCongressParty <- makeMap_party(invasivesCongressgg)  +
+  labs(title = "c - Invasive plants richness\nFederal Congressional Legislative District")
+
+# Visualize distribution
+plantSenateParty
+plantHouseParty
+plantCongressParty
+```
+
+Republicans represent more areas with more invasive species because they control more of the state and happen to control the northwestern parts of the state that has more invasive species present.  
+
+As the divisions between each legistative district get smaller, the distribution between parties get more even, but Republicans still represent areas with more invasive species present. As divisions between each legistative district get bigger, Republicans represent areas with even more invasive species.
+
+## **Does the rate of human population growth correlate to the rate of plant species invasions?**
+Humans are affecting the environment either directly, and within this may affect invasive species establishment success. Based on the assumption that more humans would result in more species we explored this question by calculating human gorwth rates and eplored correlations to invasion rates in groups of plants.  
+
+```{r Select appropriate dates for rates calculation, include=FALSE}
+### Data preparation and calculation
+
+# 1. Subset invasives counts for selected years_
+# Subset the invasive plants data for the year 2000 and 2010. code for the years in two separate data.frames
+
+NIS_plants2000 <- nis_plantsNArm[nis_plantsNArm@data$year == 2000,]
+NIS_plants2010 <- nis_plantsNArm[nis_plantsNArm@data$year == 2010,]
+
+
+# Code to subset into one data.frame to have both of the years
+NIS_plants2000_2010 <- nis_plantsNArm[nis_plantsNArm@data$year == 2000 & nis_plantsNArm@data$year == 2010,]
+```
+
+```{r Invasive plants abundance for selected years, include=FALSE}
+# 2. Calculate invasives counts (relative abundance) per grain per year (2000 and 2010)_
+# Create a function that calculates species occurences in each grain
+sr_per_grain <- function(df, grain, x, y, z){
+  hold_over <- over(df, grain)
+  hold_table <- table(hold_over[[x]])
+  hold_tibble <- as.tibble(hold_table)
+  colnames(hold_tibble) <- c(y,z)
+  return(hold_tibble)
+}
+
+# Calculate species counts per each year per county
+invasivesPerCounty2000s <- sr_per_grain(NIS_plants2000, county, x = "COUNTY_NAM", y = "COUNTY_NAM", z = "nInvasives")
+invasivesPerCounty2010s <- sr_per_grain(NIS_plants2010, county, x = "COUNTY_NAM", y = "COUNTY_NAM", z = "nInvasives")
+```
+
+```{r Read in census data, include=FALSE}
+# 3. Using census data, select and wrangle dataset to be used for human population growth calculation
+
+#pop <- read_csv(file.choose()) # download and load provided data sheet
+pop <- read_csv("/Users/christophercarnivale/Desktop/TempleRcourse/county_census.csv")
+as_tibble(pop)
+
+# NOTE: Some machines do not support the file.choose( function. If so, make sure to manually include your directory and upload the CSV file named "county_census.csv")
+
+```
+
+```{r Clean and organize census data for EDA, include=FALSE}
+# Extract county and clean FIPS code
+pop1 <- as.character(pop$state_county_municp_FIPS) # change FIPS column to character
+is.character(pop1)                                 # pop1 is a character vector
+FIPS_COUNT<-substr(pop1, 3,5)                      # keep only county FIPS code
+
+# Alter county name so it matches with invasives county names
+rm_county <- c("county")
+pop2 <- as.character(pop$county)
+is.character(pop2)                                 # pop2 is a character vector
+county_name <- str_replace_all(pop2, rm_county, " ")
+COUNTY_NAM <- toupper(county_name)
+
+#Add tidy FIPS code and county name to population data
+pop_tidy <- cbind(pop, COUNTY_NAM, FIPS_COUNT)
+as_tibble(pop_tidy)
+pop_tidy %>%
+  drop_na()  #pop_tidy is tidy and ready for analysis!
+
+```
+
+```{r Calculating rates of growth, include=FALSE}
+# 4. Calculate Human population change rates and plant invasion rates as well_
+
+# Population rates
+pop_change <- as.integer(as.character(pop_tidy$change_2000_to_2010))  # turn pop change into integer
+pop_change_rate <- pop_change/10        # create new vector w/ pop change rate
+pop_tidy <- cbind(pop_tidy,pop_change_rate)  # add pop change rate back into data frame
+
+# Invasion rates
+invasives_change<-merge(invasivesPerCounty2000s, invasivesPerCounty2010s, by=c("COUNTY_NAM"))     
+
+# Merge invasives per county 2000 and 2010 data frames
+names(invasives_change) <- c("COUNTY_NAM", "n_inv_2000", "n_inv_2010") # change the column names
+inv_rate <- invasives_change%>%
+  mutate(inv_rate = (n_inv_2010-n_inv_2000)/10) # new data frame with invasion rate merged in
+```
+
+```{r Mapping human pop change, echo = FALSE, warning = FALSE}
+### Distribution of invasion rate and human population growth
+
+pop_county <- county
+pop_county@data <- cbind(pop_county@data, pop_tidy$pop_change_rate)
+pop_gg <- fortify(pop_county, region='COUNTY_NAM') 
+pop_gg <- left_join(pop_gg, pop_county@data, by = c("id" = 'COUNTY_NAM'))  
+colnames(pop_gg)[colnames(pop_gg) %in% 'pop_tidy$pop_change_rate'] <- 'pop_change_rate' 
+
+ggplot(data = pop_gg) +
+  geom_polygon(aes(x = long, y = lat, group = id, fill = pop_change_rate)) + 
+  coord_fixed(1.3) + 
+  scale_fill_gradient(name = "Population \n growth rate") +
+  labs(title = "Population growth rate per year \nper Pennsylvania County (between 2000 and 2010)", x = "Longitude", y = "Latitude") +
+   theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r Map the invasion rate change, echo = FALSE, warning = FALSE}
+inv_county <- county
+inv_county@data <- cbind(inv_county@data, inv_rate$inv_rate)
+inv_gg <- fortify(inv_county, region ='COUNTY_NAM') 
+inv_gg <- left_join(inv_gg, inv_county@data, by=c("id" = 'COUNTY_NAM'))
+colnames(inv_gg)[colnames(inv_gg) %in% 'inv_rate$inv_rate'] <- 'inv_rate'
+
+ggplot(data = inv_gg) +
+  geom_polygon(aes(x = long, y = lat, group = id, fill = inv_rate)) + 
+  coord_fixed(1.3) + 
+  scale_fill_gradient(name = "Invasion rate \nper year") +
+  labs(title = "Invasions per year per Pennsylvania County \n(between 2000 and 2010)", x = "Longitude", y = "Latitude") +
+   theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+## **Is there a correlation between population growth and invasion rate?**
+
+```{r Correlation calculation, echo = FALSE}
+cor.test(pop_tidy$pop_change_rate, inv_rate$inv_rate)
+# P-value is 0.37... there is no correlation
+
+# Correlation between pop size in 2010 and invasion rate?
+cor.test(pop_tidy$pop_2010, inv_rate$inv_rate)
+# Also no correlation! p-value is 0.87
+
+cor.test(pop_tidy$pop_2010, inv_rate$n_inv_2010)
+# p=0.296
+```
+
+```{r Exploring correlations with transformed data, echo = FALSE}
+### What if data is transformed?
+
+pop_gg_hist <- ggplot(data = pop_gg) +
+  stat_bin(mapping = aes(x = pop_change_rate), bins = 50) +
+  labs(title = "Human population rates data distribution", 
+      x = "Growth rate", y = "Frequency of occurence by County") +
+  theme(plot.title = element_text(hjust = 0.5))
+pop_gg_hist # normal(ish distribution) 
+
+inv_gg_hist<-ggplot(data = inv_gg) + 
+  stat_bin(mapping=aes(x=inv_rate), bins = 50) +
+  labs(title = "Invasion rates data distribution", 
+        x = "Invasion rate", y = "Frequency of occurence by County") +
+  theme(plot.title = element_text(hjust = 0.5))
+inv_gg_hist     # also normal distribution
+
+# log transform data (constants added to eliminate negative values)
+log_pop_rate <- log(pop_tidy$pop_change_rate + 6000)
+log_inv_rate<-log(inv_rate$inv_rate + 1)
+
+# Do log transformed rates correlate?
+cor.test(log_inv_rate, log_pop_rate)
+# The pp value is 0.77. The invasion rate and population growth rate are not correlated!!
+```
+
+In summary, our exploratory data analysis indicated for no direct relationship between human population growth and increase in invasive plants occurrence in the state of Pennsylvania, and that relationship was confirmed by the calculation of correlation indices, that showed no statistical signifficance. That could be because data is not evenly collected and sitributed. However, transformation of data did not seem to provide any re-normalization of distributions, therefore not affecting correlation outcomes. 
+
+It is important to highlight that, given that data limitation might be hindering results here, a more robust exploratory analysis perhaps with invasives spread instead of growth, might be directly realted to human population dynamics. 
+
+## **Can occurence of most abudant invasive plant species increase overall invasive plant richness?**
+
+### Finding Covariation between Species and Species Groups
+A long debated theory in invasive ecology, is this idea of an invasion meltdown (one invasive species facilitating establishment of another invasive or multiple of those). To approach this subject, we looked if patterns of invasive plant richness were being driven by increased abundance of one invasive plant species.For that, we selected most abundant plant species available in the dataset and explored covariants.In order to investigate if those could have been affected by political decisions, we will be using species richness by congressional districts to investigate variation.
+
+```{r Highest species count in PA, echo = FALSE}
+# 1. Finding Most Prevalent Invasive Plants in PA
+## Finding species most common in plant group
+
+counts <- count(nis_plants$common_name)
+counts[order(-counts$freq),] %>%
+  head(5)
+```
+
+```{r Total Count per District, include=FALSE}
+# 2.Calculating Total Invasive Species Count per Congressional District
+## Calculate total invasive species count per congressional district
+
+invasivesPerCongress <- sr_per_grain(NIS_plants, congress, "LEG_DISTRI", "congress district", "plant_NIS")
+invasivesPerCounty <- sr_per_grain(NIS_plants, county, "COUNTY_NAM", "county", "plant_NIS")
+```
+
+```{r Covariation Analysis, echo = FALSE}
+# 3.Plotting Covariance of Most Frequently Reported Invasive Plants
+
+## 3.1 Attempt at Hydrilla covariation
+HydrillaSubset <- NIS_plants[grep("Hydrilla", NIS_plants$common_name), ]
+HydrillaPerCongress <- over(HydrillaSubset,congress)
+HydrillaPerCongress <- table(HydrillaPerCongress$C_LASTNAME)
+HydrillaPerCongress <- as.tibble(HydrillaPerCongress)
+colnames(HydrillaPerCongress) <- c('congress_party', 'Hydrilla_NIS')
+congress_vs_Hydrilla <- data.frame(Hydrilla = HydrillaPerCongress$Hydrilla_NIS, total = invasivesPerCongress$plant_NIS)
+
+# Visualize covariation in a plot with proper covariation indices calculation
+hydrilla_cong <- ggscatter(congress_vs_Hydrilla, x = "Hydrilla", y = "total", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          title = "a - by Congressional District",
+          xlab = "Hydrilla sp. counts", 
+          ylab = "Total species counts") +
+  font("title", size = 12) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+HydrillaSubset <- NIS_plants[grep("Hydrilla", NIS_plants$common_name), ]
+HydrillaPerCounty <- over(HydrillaSubset,county)
+HydrillaPerCounty <- table(HydrillaPerCounty$COUNTY_NAM)
+HydrillaPerCounty <- as.tibble(HydrillaPerCounty)
+colnames(HydrillaPerCounty) <- c('County', 'Hydrilla_NIS')
+county_vs_Hydrilla <- data.frame(Hydrilla = HydrillaPerCounty$Hydrilla_NIS, total = invasivesPerCounty$plant_NIS)
+
+# Visualize covariation in a plot with proper covariation indices calculation
+hydrilla_county <- ggscatter(county_vs_Hydrilla, x = "Hydrilla", y = "total", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          title = "b - by County", 
+          xlab = "Hydrilla sp. counts", 
+          ylab = "Total species counts") +
+  font("title", size = 12) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+grid.arrange(hydrilla_cong, hydrilla_county, nrow = 1,
+  top = "Variations in Hydrilla and other species occurence in Pennsylvania")
+```
+
+While Hydrilla may have the highest species count across invasive plant species, there is little covariation between the species and the group as a whole. However, just as noted previously, it might be that political divisions of land do not directly affect species distribution. Geographical divisions are more take into account other variables such as environmental factors that might b more directly correlated with species invasions. In fact, when the same correlation is explored but using county data, there is a positive relationship in which increased number of Hydrilla is correlated with species richness. 
+
+```{r Milfoil Covariation Analysis, echo = FALSE}
+# 3.2 Attempt at Eurasian Water-milfoil covariation
+milfoilSubset <- NIS_plants[grep("Eurasian Water-milfoil", NIS_plants$common_name), ]
+milfoilPerCongress <- over(milfoilSubset,congress)
+milfoilPerCongress <- table(milfoilPerCongress$C_LASTNAME)
+milfoilPerCongress <- as.tibble(milfoilPerCongress)
+colnames(milfoilPerCongress) <- c('congress_party', 'milfoil_NIS')
+congress_vs_milfoil <- data.frame(milfoil = milfoilPerCongress$milfoil_NIS, total = invasivesPerCongress$plant_NIS)
+
+# Visualize covariation in a plot with proper covariation indices calculation
+milfoil_cong <- ggscatter(congress_vs_milfoil, x = "milfoil", y = "total", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "Eurasian Water-milfoil count", 
+          ylab = "Total Species Count ",
+          title = "a- by Congressional Districts") +
+  font("title", size = 12) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+milfoilSubset <- NIS_plants[grep("Eurasian Water-milfoil", NIS_plants$common_name), ]
+milfoilPerCounty <- over(milfoilSubset,county)
+milfoilPerCounty <- table(milfoilPerCounty$COUNTY_NAM)
+milfoilPerCounty <- as.tibble(milfoilPerCounty)
+colnames(milfoilPerCounty) <- c('county', 'milfoil_NIS')
+county_vs_milfoil <- data.frame(milfoil = milfoilPerCounty$milfoil_NIS, total = invasivesPerCounty$plant_NIS)
+
+# Visualize covariation in a plot with proper covariation indices calculation
+milfoil_county <- ggscatter(county_vs_milfoil, x = "milfoil", y = "total", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "Eurasian Water-milfoil count", 
+          ylab = "Total Species Count ",
+          title = "b -by County") +
+  font("title", size = 12) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+grid.arrange(milfoil_cong, milfoil_county, nrow = 1,
+             top = "Eurasian Water-milfoil and total invasive plant counts across PA")
+```
+
+Similar pattern is observed for Hydrilla holds true for the Eurasian Water-milfoil in which the correlation using county divisions seems to be more biologically informative than political divisions. 
+
+In summary, as expected the legislative division of territory (as also noted for species richness by party analysis) might be hindering relevant ecological patterns of species occurence and distribution. Therefore, for a more comprehensive analysis, other factors such as environmental data could deepen an understanding in vasion dynamics in Pennsylvania.
+
+# **Final considerations**
+Here we report plant invasives distribution for the state of Pennsylvania and how multiple factors such as human demographics are not satisfactory in explaining variations. Species invasions are a complex ecological process and should account for more specific factors. For instance, we believe enviromental constraints, biological filters such as biotic interactions and human dispersal dynamics could better explain establishment and spread process of invasive plants in Pennsylvania
